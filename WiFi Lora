@@ -1,0 +1,141 @@
+/*
+ * 
+ *  This sketch sends data via HTTP GET requests to data.sparkfun.com service.
+ *
+ *  You need to get streamId and privateKey at data.sparkfun.com and paste them
+ *  below. Or just customize this script to talk to other HTTP servers.
+ *
+ */
+#include "heltec.h"
+#include <Regexp.h>
+#include <ArduinoMqttClient.h>
+#include <WiFi.h>
+#include <WiFiMulti.h>
+
+#define BAND    915E6  //you can set band here directly,e.g. 868E6,915E6
+WiFiMulti WiFiMulti; //allows multiple routers/networks. Can program multiple networks but connect to strongest
+WiFiClient wifiClient;
+MqttClient mqttClient(wifiClient);//allows connection to MQTT service
+
+// mosquitto_sub -h localhost -t VTSFIN/HalterSenders/data -u vtsmart01 -P Sm@rtF@rm
+const char broker[] = "cfsr.bse.vt.edu"; //Host
+int        mqttport     = 1883; //Port for MQTT
+const char topic[]  = "VTSFIN/HalterSenders/data";
+// Loop Wait Times
+const long interval = 1000; //ms
+unsigned long previousMillis = 0;
+int count = 0;
+
+const char* ssid     = "iPhone";
+const char* password = "qwertyuiop1";
+//const char* ssid     = "ARS-Guest";
+//const char* password = "";
+const char* host = "cfsr.bse.vt.edu";
+const uint16_t port = 80;
+
+void setup() {
+    Serial.begin(115200);
+    delay(10);
+    Heltec.begin(true /*DisplayEnable Enable*/, true /*Heltec.LoRa Disable*/, true /*Serial Enable*/, true /*PABOOST Enable*/, BAND /*long BAND*/);
+
+    // We start by connecting to a WiFi network
+    WiFiMulti.addAP(ssid, password);
+
+    Serial.print("Waiting for WiFi... ");
+    while(WiFiMulti.run() != WL_CONNECTED) {
+        Serial.print(".");
+        Heltec.display->clear();
+        Heltec.display->drawString(0, 0, "WiFi Failed!");
+        Heltec.display->display();
+delay(300);
+        delay(500);
+    }
+    Serial.println("");
+    Serial.println("WiFi connected");
+    Heltec.display->clear();
+    Heltec.display->drawString(0, 0, "WiFi Connected!");
+    Heltec.display->display();
+    Serial.println("IP address: ");
+    Serial.println(WiFi.localIP());
+
+  Serial.print("Attempting to connect to the MQTT broker: ");
+  Serial.println(broker);
+  // mosquitto_sub -h localhost -t VTSFIN/HalterSenders/data -u vtsmart01 -P Sm@rtF@rm
+  mqttClient.setUsernamePassword("vtsmart01","Sm@rtF@rm");
+  if (!mqttClient.connect(broker, mqttport)) {
+    Serial.print("MQTT connection failed! Error code = ");
+    Serial.println(mqttClient.connectError());
+    while (1);
+  }
+
+  Serial.println("You're connected to the MQTT broker!");
+  Serial.println();
+  delay(500);
+}//End of Setup Loop
+void loop()
+{
+   if(WiFiMulti.run() != WL_CONNECTED) {
+    while(WiFiMulti.run() != WL_CONNECTED) {
+        Serial.print(".");
+        delay(500);
+    }
+  if (!mqttClient.connect(broker, mqttport)) {
+    Serial.print("MQTT connection failed! Error code = ");
+    Serial.println(mqttClient.connectError());
+    while (1);
+  }
+}
+  // try to parse packet
+  LoRa.setSyncWord(0x34); //Necessary for LoRa, passoword of sorts Hex word "52"
+  LoRa.setSpreadingFactor(7); //How wide signal is, how many channels will fit into frequency. 16 or 32 different channels
+  int packetSize = LoRa.parsePacket(); //Searching for a packet
+  if (packetSize>0) {
+    // received a packet, packet size 256 bytes
+    Serial.print("Received packet '");
+    Serial.println(packetSize);
+    // read packet
+//    byte incomingLength = LoRa.read();    // incoming msg length
+    String incoming = "";
+    while (LoRa.available()){
+      incoming += (char)LoRa.read(); 
+    }
+    if (packetSize != incoming.length()) {   // check length for error
+    Serial.println("error: message length does not match length");
+    return;                             // skip rest of function
+    }
+    char buf [256];
+    incoming.toCharArray(buf, incoming.length());
+    MatchState ms (buf);
+  // replace <numb> with *
+    int count = ms.GlobalReplace ("<.*>ID", "IDARS01");
+    Serial.println (buf);
+ // print RSSI of packet
+    Serial.print("' with RSSI ");
+    Serial.println(LoRa.packetRssi());   // need to add Rssi to 
+    Serial.println("Waiting 5 seconds before restarting...");
+      // call poll() regularly to allow the library to send MQTT keep alives which
+  // avoids being disconnected by the broker
+  mqttClient.poll();
+  // avoid having delays in loop, we'll use the strategy from BlinkWithoutDelay
+  // see: File -> Examples -> 02.Digital -> BlinkWithoutDelay for more info
+  unsigned long currentMillis = millis();
+  if (currentMillis - previousMillis >= interval) {
+    // save the last time a message was sent
+    previousMillis = currentMillis;
+    Serial.print("Sending message to topic: ");
+    Serial.println(topic);
+    Serial.print("hello ");
+    Serial.println(count);
+
+    // send message, the Print interface can be used to set the message contents
+    mqttClient.beginMessage(topic);
+    mqttClient.print(buf);
+    mqttClient.endMessage();
+    Serial.println();
+    Heltec.display->clear();
+    Heltec.display->drawString(0, 0, buf);
+    Heltec.display->display();
+    }
+    count++;
+  }
+}
